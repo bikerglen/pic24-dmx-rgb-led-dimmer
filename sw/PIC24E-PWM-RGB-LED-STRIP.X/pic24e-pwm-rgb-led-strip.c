@@ -1,5 +1,12 @@
-#include </Applications/microchip/xc16/v1.25/support/generic/h/xc.h>
-#include </Applications/microchip/xc16/v1.25/support/PIC24E/h/p24EP128MC202.h>
+// This same code runs on 6-inch strip board, 2-inch round board, and DIN rail mount board.
+// D:\users\glen\Eagle Projects\PIC24 RGB LED Six Inch Strip
+// D:\users\glen\Eagle Projects\PIC24 RGB LED Two Inch Round
+// D:\users\glen\Eagle Projects\PIC24 RGB LED Two Inch Round - R2\pic24rgbrnd01-r2b.brd
+// D:\users\glen\Eagle Projects\PIC24 RGB LED DIN Rail Mount
+// 
+
+#include <xc.h>
+#include <p24EP128MC202.h>
 #include "DEE Emulation 16-bit.h"
 #include "sine.h"
 
@@ -34,6 +41,7 @@ void RunDMX512 (void);
 void RunSineEffect (void);
 void RunStrobeEffect (void);
 void RunLampTest (void);
+void RunColorWash (void);
 unsigned char CheckButton (void);
 
 
@@ -210,9 +218,23 @@ int main()
         mode = 2;
 	} else if (base_address == 515) {
         mode = 3;
+	} else if (base_address == 516) {
+        mode = 4;
     } else {
         mode = 0;
     }
+    
+    // if everything comes back 0xffff, assume emulated eeprom
+    // is not programmed and initialize it to defaults
+    /*
+    if ((base_address == 0xffff) && (color_mode == 0xffff)) {
+        DataEEWrite (516, 0);
+        DataEEWrite (  0, 2);
+        base_address = 1;
+        color_mode = 0;
+        mode = 4;
+    }
+    */
 
     // default to address 1 if not configured or invalid address
     if ((base_address < 1) || (base_address > 512)) {
@@ -239,9 +261,12 @@ int main()
         } else if (mode == 3) {
             // runs regardless of RA0 state
             RunLampTest ();
+        } else if (mode == 4) {
+            // runs regardless of RA0 state
+            RunColorWash ();
         }
         mode++;
-        if (mode > 3) {
+        if (mode > 4) {
             mode = 0;
         }
     }
@@ -553,6 +578,70 @@ void RunLampTest (void)
                 return;
             }
         }
+    }
+}
+
+
+// color wash variables
+static uint8_t washDirection;
+static uint16_t washStep;
+static uint32_t washColor;
+static uint8_t xlatehi, xlatelo;
+static uint8_t xlater, xlateg, xlateb;
+
+void RunColorWash (void)
+{
+    // initialize things
+    washDirection = 1;
+    washStep = 14; 
+    washColor = 0;
+    
+    // run loop until button pressed
+    while (1) {
+        // do periodic tasks when timer expires
+        if (_T1IF == 1) {
+            _T1IF = 0;
+            
+			// compute next step in sequence
+            if (washDirection == 0) {
+                washColor += washStep;
+                if (washColor >= 393216) {
+                      washColor -= 393216;
+                }
+          	} else {
+                washColor -= washStep;
+                if (washColor >= 393216) {
+                    washColor += 393216;
+                }
+            }
+          	xlatehi = (washColor >> 16) & 0xff;
+            xlatelo = (washColor >> 8) & 0xff;
+
+            switch (xlatehi) {
+                case 0: xlater = 0xff;           xlateg = 0x00;           xlateb = xlatelo; break;
+                case 1: xlater = 0xff - xlatelo; xlateg = 0x00;           xlateb = 0xff; break;
+                case 2: xlater = 0x00;           xlateg = xlatelo;        xlateb = 0xff; break;
+                case 3: xlater = 0x00;           xlateg = 0xff;           xlateb = 0xff - xlatelo; break;
+                case 4: xlater = xlatelo;        xlateg = 0xff;           xlateb = 0x00; break;
+                case 5: xlater = 0xff;           xlateg = 0xff - xlatelo; xlateb = 0x00; break;
+          	}
+
+			// update levels
+            PDC1 = PMapLut[xlater];
+            PDC2 = PMapLut[xlateg];
+            PDC3 = PMapLut[xlateb];
+
+            // blink orange LED at 2.5Hz
+            orange_led_timer++;
+            if (orange_led_timer == 10) {
+                orange_led_timer = 0;
+                LATBbits.LATB6 ^= 1;
+            }
+            if (CheckButton ()) {
+                return;
+            }
+        }
+
     }
 }
 
